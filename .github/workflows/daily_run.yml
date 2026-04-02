@@ -1,0 +1,45 @@
+name: ⚾ MLB Daily Bet Analysis
+
+on:
+  schedule:
+    # 15:00 UTC = 11:00 AM ET (accounts for EDT offset)
+    - cron: '0 15 * * *'
+  # Allows manual trigger from GitHub Actions UI — no code needed
+  workflow_dispatch:
+
+jobs:
+  run-algo:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to git push results back
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install requests pandas tabulate colorama
+
+      - name: Run MLB betting algorithm
+        env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        run: python mlb_betting_algo.py --save-json
+
+      - name: Commit & push results
+        run: |
+          git config --global user.email "mlb-algo-bot@noreply.github.com"
+          git config --global user.name "MLB Algo Bot"
+          git add mlb_results.json
+          # Only commit if something changed
+          git diff --staged --quiet || git commit -m "⚾ Auto-update: $(date '+%Y-%m-%d %H:%M UTC')"
+          git push
