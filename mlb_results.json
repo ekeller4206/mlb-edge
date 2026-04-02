@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-04-02T17:38:51.702169+00:00",
+  "generated_at": "2026-04-02T18:16:11.107480+00:00",
   "date": "2026-04-02",
   "game_count": 4,
   "bet_count": 3,
@@ -21,10 +21,10 @@
       "home_k9": 11.25,
       "away_k9": 19.76,
       "home_wrc": 100,
-      "away_wrc": 93,
+      "away_wrc": 92,
       "home_win_prob": 30.0,
       "away_win_prob": 70.0,
-      "proj_total": 9.59,
+      "proj_total": 9.57,
       "home_ml": -118,
       "away_ml": null,
       "ou_line": 8.5,
@@ -154,5 +154,5 @@
     }
   ],
   "props": [],
-  "model_version": "3.0"
+  "model_version": "3.1"
 }
