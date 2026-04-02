@@ -1,8 +1,8 @@
 {
-  "generated_at": "2026-04-02T03:47:50.913316+00:00",
+  "generated_at": "2026-04-02T17:38:51.702169+00:00",
   "date": "2026-04-02",
   "game_count": 4,
-  "bet_count": 4,
+  "bet_count": 3,
   "strong_count": 2,
   "solid_count": 1,
   "games": [
@@ -25,10 +25,10 @@
       "home_win_prob": 30.0,
       "away_win_prob": 70.0,
       "proj_total": 9.59,
-      "home_ml": -155,
-      "away_ml": 136,
-      "ou_line": 9.0,
-      "ou_price": -122
+      "home_ml": -118,
+      "away_ml": null,
+      "ou_line": 8.5,
+      "ou_price": -115
     },
     {
       "matchup": "ATL @ AZ",
@@ -45,13 +45,13 @@
       "home_k9": 8.57,
       "away_k9": 4.5,
       "home_wrc": 99,
-      "away_wrc": 100,
-      "home_win_prob": 37.7,
-      "away_win_prob": 62.3,
-      "proj_total": 8.79,
-      "home_ml": 105,
-      "away_ml": -122,
-      "ou_line": 8.5,
+      "away_wrc": 102,
+      "home_win_prob": 37.6,
+      "away_win_prob": 62.4,
+      "proj_total": 8.82,
+      "home_ml": 102,
+      "away_ml": -120,
+      "ou_line": 9.0,
       "ou_price": -115
     },
     {
@@ -74,9 +74,9 @@
       "away_win_prob": 48.2,
       "proj_total": 5.2,
       "home_ml": 110,
-      "away_ml": -124,
-      "ou_line": 7.5,
-      "ou_price": 100
+      "away_ml": -130,
+      "ou_line": 8.0,
+      "ou_price": -105
     },
     {
       "matchup": "TOR @ CWS",
@@ -97,28 +97,28 @@
       "home_win_prob": 43.8,
       "away_win_prob": 56.2,
       "proj_total": 8.18,
-      "home_ml": null,
-      "away_ml": null,
-      "ou_line": null,
-      "ou_price": null
+      "home_ml": 168,
+      "away_ml": -200,
+      "ou_line": 7.5,
+      "ou_price": -115
     }
   ],
   "bets": [
     {
       "type": "Moneyline",
-      "matchup": "MIN @ KC",
-      "game_time": "2:10 PM ET",
-      "bet": "MIN ML",
-      "pitcher_note": "SP: Taj Bradley",
-      "market_odds": 136,
-      "market_odds_fmt": "+136",
-      "fair_odds": -233,
-      "fair_odds_fmt": "-233",
-      "our_prob": 70.0,
-      "market_prob": 42.4,
-      "ev_pct": 65.2,
+      "matchup": "TOR @ CWS",
+      "game_time": "4:10 PM ET",
+      "bet": "CWS ML",
+      "pitcher_note": "SP: Sean Burke",
+      "market_odds": 168,
+      "market_odds_fmt": "+168",
+      "fair_odds": 128,
+      "fair_odds_fmt": "+128",
+      "our_prob": 43.8,
+      "market_prob": 37.3,
+      "ev_pct": 17.5,
       "rating": 8.8,
-      "logic": "Away SP xFIP edge (1.41 vs 13.35); Away SP strikeout dominance (K/9 edge)"
+      "logic": "Away SP xFIP edge (0.07 vs 1.85); Away offense wRC+ advantage (105 vs 84); Away SP strikeout dominance (K/9 edge)"
     },
     {
       "type": "Moneyline",
@@ -126,14 +126,14 @@
       "game_time": "9:40 PM ET",
       "bet": "ATL ML",
       "pitcher_note": "SP: Reynaldo L\u00f3pez",
-      "market_odds": -122,
-      "market_odds_fmt": "-122",
-      "fair_odds": -165,
-      "fair_odds_fmt": "-165",
-      "our_prob": 62.3,
-      "market_prob": 55.0,
-      "ev_pct": 13.3,
-      "rating": 8.1,
+      "market_odds": -120,
+      "market_odds_fmt": "-120",
+      "fair_odds": -166,
+      "fair_odds_fmt": "-166",
+      "our_prob": 62.4,
+      "market_prob": 54.5,
+      "ev_pct": 14.4,
+      "rating": 8.6,
       "logic": "Away SP xFIP edge (5.27 vs 9.53); Home SP strikeout dominance (K/9 edge)"
     },
     {
@@ -151,22 +151,6 @@
       "ev_pct": 8.9,
       "rating": 6.4,
       "logic": "Away SP xFIP edge (3.60 vs 4.08); Away offense wRC+ advantage (90 vs 78); Home SP strikeout dominance (K/9 edge)"
-    },
-    {
-      "type": "Total",
-      "matchup": "NYM @ SF",
-      "game_time": "9:45 PM ET",
-      "bet": "Under 7.5",
-      "pitcher_note": "Proj: 5.2 runs",
-      "market_odds": 100,
-      "market_odds_fmt": "+100",
-      "fair_odds": -117,
-      "fair_odds_fmt": "-117",
-      "our_prob": 54.0,
-      "market_prob": 50.0,
-      "ev_pct": 8.0,
-      "rating": 5.8,
-      "logic": "Model projects 5.2 runs; line is 7.5 (2.3-run edge)."
     }
   ],
   "props": [],
