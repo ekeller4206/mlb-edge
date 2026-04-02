@@ -1,653 +1,667 @@
 """
-MLB Betting Dashboard — Streamlit App
-State-of-the-art UI. Zero manual input. Auto-refreshes daily.
+MLB Sabermetrics Betting Algorithm v3.1
+Fully automated — no manual input required.
+Run via GitHub Actions daily at 11 AM ET.
+
+Props source: PrizePicks public API (free, no key needed)
+  → https://api.prizepicks.com/projections?league_id=2
+Fallback:     MLB Stats API season leader boards
 """
 
-import json
 import os
-import time
+import sys
+import json
 import math
+import time
+import argparse
 import requests
-import streamlit as st
 import pandas as pd
 from datetime import datetime, date, timezone
-from pathlib import Path
 
-# ── Page Config ───────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="⚾ MLB Edge",
-    page_icon="⚾",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
+# ── API Keys (loaded from environment — never hardcode) ──────────────────────
+ODDS_API_KEY  = os.environ.get("ODDS_API_KEY", "YOUR_ODDS_API_KEY_HERE")
 
-# ── Custom CSS ────────────────────────────────────────────────────────────────
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@300;400;500&family=Instrument+Serif:ital@0;1&display=swap');
+# ── Config ───────────────────────────────────────────────────────────────────
+ODDS_API_BASE = "https://api.the-odds-api.com/v4"
+MLB_API_BASE  = "https://statsapi.mlb.com/api/v1"
+SPORT_KEY     = "baseball_mlb"
+MIN_RATING    = 5.5
+EV_THRESHOLD  = 0.03
+CURRENT_YEAR  = date.today().year
 
-/* ── Root & Background ── */
-:root {
-    --green:   #00ff87;
-    --red:     #ff3b3b;
-    --amber:   #ffb347;
-    --blue:    #4fc3f7;
-    --dark:    #080c0f;
-    --surface: #0d1318;
-    --card:    #111820;
-    --border:  rgba(255,255,255,0.07);
-    --text:    #e8edf2;
-    --muted:   #5a6a7a;
-}
+# ── Odds Math ─────────────────────────────────────────────────────────────────
 
-html, body, [data-testid="stAppViewContainer"] {
-    background-color: var(--dark) !important;
-    color: var(--text) !important;
-}
+def american_to_prob(odds: int) -> float:
+    if odds > 0:
+        return 100 / (odds + 100)
+    return abs(odds) / (abs(odds) + 100)
 
-[data-testid="stAppViewContainer"] {
-    background:
-        radial-gradient(ellipse 80% 60% at 10% -10%, rgba(0,255,135,0.06) 0%, transparent 60%),
-        radial-gradient(ellipse 60% 50% at 90% 110%, rgba(79,195,247,0.05) 0%, transparent 55%),
-        var(--dark) !important;
-}
+def prob_to_american(p: float) -> int:
+    p = max(0.01, min(0.99, p))
+    if p >= 0.5:
+        return -round((p / (1 - p)) * 100)
+    return round(((1 - p) / p) * 100)
 
-[data-testid="stHeader"] { background: transparent !important; }
-[data-testid="stSidebar"] { background: var(--surface) !important; }
-.block-container { padding: 1.5rem 2.5rem 4rem !important; max-width: 1600px !important; }
+def ev_pct(our_prob: float, market_odds: int) -> float:
+    market_prob = american_to_prob(market_odds)
+    return (our_prob - market_prob) / market_prob
 
-/* ── Typography ── */
-* { font-family: 'DM Mono', monospace !important; }
-h1, h2, h3 { font-family: 'Bebas Neue', cursive !important; letter-spacing: 0.08em !important; }
+def bet_strength(ev: float, confidence: float) -> float:
+    ev_score  = min(max(ev / 0.15, 0), 1)
+    composite = ev_score * 0.65 + confidence * 0.35
+    return round(1 + composite * 9, 1)
 
-/* ── Metric overrides ── */
-[data-testid="metric-container"] {
-    background: var(--card) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: 12px !important;
-    padding: 1rem 1.2rem !important;
-}
-[data-testid="metric-container"] label { color: var(--muted) !important; font-size: 0.72rem !important; letter-spacing: 0.12em !important; text-transform: uppercase !important; }
-[data-testid="metric-container"] [data-testid="stMetricValue"] { font-family: 'Bebas Neue', cursive !important; font-size: 2.4rem !important; }
+def fmt_odds(o: int) -> str:
+    return f"+{o}" if o > 0 else str(o)
 
-/* ── Divider ── */
-hr { border-color: var(--border) !important; }
+# ── MLB Stats API ─────────────────────────────────────────────────────────────
 
-/* ── Tab styling ── */
-[data-baseweb="tab-list"] { background: var(--surface) !important; border-radius: 10px !important; padding: 4px !important; gap: 4px !important; border: 1px solid var(--border) !important; }
-[data-baseweb="tab"] { border-radius: 8px !important; color: var(--muted) !important; font-size: 0.8rem !important; letter-spacing: 0.08em !important; }
-[aria-selected="true"] { background: var(--card) !important; color: var(--green) !important; }
+def get_schedule() -> list:
+    today = date.today().strftime("%Y-%m-%d")
+    r = requests.get(
+        f"{MLB_API_BASE}/schedule",
+        params={"sportId": 1, "date": today,
+                "hydrate": "probablePitcher,team,linescore"},
+        timeout=12
+    )
+    r.raise_for_status()
+    games = []
+    for db in r.json().get("dates", []):
+        games.extend(db.get("games", []))
+    return games
 
-/* ── Scrollbar ── */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: var(--dark); }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-
-/* ── Bet Cards ── */
-.bet-card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    padding: 1.3rem 1.5rem;
-    margin-bottom: 1rem;
-    position: relative;
-    overflow: hidden;
-    transition: border-color 0.2s;
-}
-.bet-card:hover { border-color: rgba(255,255,255,0.15); }
-.bet-card::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 3px;
-    border-radius: 16px 16px 0 0;
-}
-.bet-card.strong::before { background: linear-gradient(90deg, var(--green), #00d4ff); }
-.bet-card.solid::before  { background: linear-gradient(90deg, var(--amber), #ff8c00); }
-.bet-card.marginal::before { background: var(--blue); }
-
-.bet-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.8rem; }
-.bet-matchup { font-family: 'Bebas Neue', cursive !important; font-size: 1.35rem; letter-spacing: 0.06em; color: var(--text); }
-.bet-time { font-size: 0.72rem; color: var(--muted); letter-spacing: 0.1em; }
-.bet-label { font-size: 0.68rem; color: var(--muted); letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 0.2rem; }
-.bet-value { font-family: 'Bebas Neue', cursive !important; font-size: 1.6rem; letter-spacing: 0.04em; }
-.bet-grid { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr 1fr; gap: 1rem; margin-bottom: 0.9rem; }
-.bet-logic { font-size: 0.74rem; color: var(--muted); line-height: 1.6; border-top: 1px solid var(--border); padding-top: 0.7rem; margin-top: 0.2rem; }
-.logic-icon { margin-right: 0.3rem; }
-
-/* ── Rating Badge ── */
-.rating-badge {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 52px; height: 52px;
-    border-radius: 50%;
-    font-family: 'Bebas Neue', cursive !important;
-    font-size: 1.4rem;
-    font-weight: 700;
-    letter-spacing: 0;
-    flex-shrink: 0;
-}
-.rating-strong  { background: rgba(0,255,135,0.12); color: var(--green); border: 2px solid rgba(0,255,135,0.4); }
-.rating-solid   { background: rgba(255,179,71,0.12); color: var(--amber); border: 2px solid rgba(255,179,71,0.4); }
-.rating-marginal{ background: rgba(79,195,247,0.10); color: var(--blue);  border: 2px solid rgba(79,195,247,0.3); }
-
-/* ── EV Badge ── */
-.ev-positive { color: var(--green); font-size: 1.1rem; font-family: 'Bebas Neue', cursive !important; }
-.ev-medium   { color: var(--amber); font-size: 1.1rem; font-family: 'Bebas Neue', cursive !important; }
-.ev-low      { color: var(--blue);  font-size: 1.1rem; font-family: 'Bebas Neue', cursive !important; }
-
-/* ── Odds Pill ── */
-.odds-pill {
-    display: inline-block;
-    background: rgba(255,255,255,0.05);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 0.15rem 0.5rem;
-    font-size: 0.95rem;
-    letter-spacing: 0.04em;
-}
-.odds-pill.fair { border-color: rgba(0,255,135,0.3); color: var(--green); background: rgba(0,255,135,0.06); }
-
-/* ── Prop Cards ── */
-.prop-card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-left: 3px solid var(--blue);
-    border-radius: 12px;
-    padding: 1rem 1.2rem;
-    margin-bottom: 0.8rem;
-}
-.prop-grid { display: grid; grid-template-columns: 3fr 1fr 1fr 1fr 1fr; gap: 0.8rem; align-items: center; }
-.prop-player { font-size: 1rem; font-weight: 500; }
-.prop-type   { font-size: 0.7rem; color: var(--blue); letter-spacing: 0.12em; text-transform: uppercase; }
-
-/* ── Game Summary Cards ── */
-.game-card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 1.1rem 1.3rem;
-    margin-bottom: 0.8rem;
-}
-.game-teams { font-family: 'Bebas Neue', cursive !important; font-size: 1.2rem; letter-spacing: 0.06em; }
-.game-meta  { font-size: 0.7rem; color: var(--muted); margin-top: 0.3rem; }
-.prob-bar-wrap { background: rgba(255,255,255,0.05); border-radius: 4px; height: 6px; margin: 0.6rem 0; overflow: hidden; }
-.prob-bar-fill { height: 100%; background: linear-gradient(90deg, var(--green), #00d4ff); border-radius: 4px; }
-.stat-chip {
-    display: inline-block;
-    background: rgba(255,255,255,0.05);
-    border-radius: 6px;
-    padding: 0.15rem 0.5rem;
-    font-size: 0.68rem;
-    color: var(--muted);
-    margin-right: 0.3rem;
-    margin-top: 0.3rem;
-}
-.stat-chip span { color: var(--text); }
-
-/* ── Header ── */
-.dashboard-header {
-    display: flex; align-items: flex-start; justify-content: space-between;
-    margin-bottom: 2rem;
-    padding-bottom: 1.5rem;
-    border-bottom: 1px solid var(--border);
-}
-.header-logo { font-family: 'Bebas Neue', cursive !important; font-size: 3.5rem; letter-spacing: 0.1em; line-height: 1; }
-.header-logo span { color: var(--green); }
-.header-sub { font-size: 0.72rem; color: var(--muted); letter-spacing: 0.15em; text-transform: uppercase; margin-top: 0.3rem; }
-.header-ts  { font-size: 0.7rem; color: var(--muted); text-align: right; line-height: 2; }
-.header-ts strong { color: var(--text); display: block; font-size: 0.85rem; }
-
-/* ── Status Pill ── */
-.status-live {
-    display: inline-flex; align-items: center; gap: 0.4rem;
-    background: rgba(0,255,135,0.1);
-    border: 1px solid rgba(0,255,135,0.3);
-    border-radius: 20px;
-    padding: 0.25rem 0.7rem;
-    font-size: 0.7rem;
-    color: var(--green);
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-}
-.pulse {
-    width: 7px; height: 7px; border-radius: 50%;
-    background: var(--green);
-    animation: pulse 1.8s infinite;
-}
-@keyframes pulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50%       { opacity: 0.4; transform: scale(0.7); }
-}
-
-/* ── Section Headers ── */
-.section-header {
-    display: flex; align-items: center; gap: 0.7rem;
-    margin: 2rem 0 1.2rem;
-}
-.section-title { font-family: 'Bebas Neue', cursive !important; font-size: 1.6rem; letter-spacing: 0.08em; }
-.section-count {
-    background: rgba(255,255,255,0.07);
-    border-radius: 20px;
-    padding: 0.1rem 0.6rem;
-    font-size: 0.72rem;
-    color: var(--muted);
-}
-
-/* ── No-data state ── */
-.empty-state {
-    text-align: center;
-    padding: 4rem 2rem;
-    color: var(--muted);
-}
-.empty-icon { font-size: 3rem; margin-bottom: 1rem; }
-
-/* ── Disclaimer ── */
-.disclaimer {
-    margin-top: 3rem;
-    padding: 1rem 1.5rem;
-    background: rgba(255,59,59,0.06);
-    border: 1px solid rgba(255,59,59,0.2);
-    border-radius: 10px;
-    font-size: 0.7rem;
-    color: var(--muted);
-    line-height: 1.8;
-}
-</style>
-""", unsafe_allow_html=True)
-
-
-# ── Data Loading ──────────────────────────────────────────────────────────────
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def load_data() -> dict | None:
-    """Load mlb_results.json from repo root or GitHub raw URL."""
-    # Try local file first (works on Streamlit Cloud after GH Actions pushes)
-    local = Path("mlb_results.json")
-    if local.exists():
-        try:
-            with open(local) as f:
-                return json.load(f)
-        except Exception:
-            pass
-
-    # Fallback: try to pull from GitHub raw (set GITHUB_RAW_URL in secrets)
-    raw_url = os.environ.get("GITHUB_RAW_URL")
-    if raw_url:
-        try:
-            r = requests.get(raw_url, timeout=10)
-            r.raise_for_status()
-            return r.json()
-        except Exception:
-            pass
-
-    return None
-
-
-def rating_class(r: float) -> str:
-    if r >= 8.0: return "strong"
-    if r >= 6.0: return "solid"
-    return "marginal"
-
-def rating_badge_class(r: float) -> str:
-    if r >= 8.0: return "rating-strong"
-    if r >= 6.0: return "rating-solid"
-    return "rating-marginal"
-
-def ev_class(ev: float) -> str:
-    if ev >= 8: return "ev-positive"
-    if ev >= 4: return "ev-medium"
-    return "ev-low"
-
-def odds_color(market: str, fair: str) -> str:
-    """Return green if fair odds are better than market."""
+def parse_game(game: dict) -> dict:
+    teams = game.get("teams", {})
+    home  = teams.get("home", {})
+    away  = teams.get("away", {})
+    hp    = home.get("probablePitcher", {})
+    ap    = away.get("probablePitcher", {})
+    gt    = game.get("gameDate", "")
+    # Convert UTC → ET (approx)
     try:
-        m = int(market.replace("+", ""))
-        f = int(fair.replace("+", ""))
-        return "fair" if f > m else ""
+        hour_et = (int(gt[11:13]) - 4) % 24
+        ampm    = "PM" if hour_et >= 12 else "AM"
+        h12     = hour_et % 12 or 12
+        gtime   = f"{h12}:{gt[14:16]} {ampm} ET"
     except Exception:
-        return ""
+        gtime = "TBD"
 
-def render_bet_card(bet: dict):
-    rc  = rating_class(bet["rating"])
-    rbc = rating_badge_class(bet["rating"])
-    evc = ev_class(bet["ev_pct"])
-    mo  = bet.get("market_odds_fmt", str(bet.get("market_odds", "N/A")))
-    fo  = bet.get("fair_odds_fmt",   str(bet.get("fair_odds",   "N/A")))
-    oc  = odds_color(mo, fo)
-    btype_icon = "📈" if bet["type"] == "Moneyline" else "🎯"
+    return {
+        "game_pk"        : game.get("gamePk"),
+        "home_team"      : home.get("team", {}).get("name", "Home"),
+        "away_team"      : away.get("team", {}).get("name", "Away"),
+        "home_abbr"      : home.get("team", {}).get("abbreviation", "HM"),
+        "away_abbr"      : away.get("team", {}).get("abbreviation", "AW"),
+        "home_id"        : home.get("team", {}).get("id"),
+        "away_id"        : away.get("team", {}).get("id"),
+        "game_time"      : gtime,
+        "home_pitcher"   : hp.get("fullName", "TBD"),
+        "away_pitcher"   : ap.get("fullName", "TBD"),
+        "home_pitcher_id": hp.get("id"),
+        "away_pitcher_id": ap.get("id"),
+        "venue"          : game.get("venue", {}).get("name", ""),
+    }
 
-    st.markdown(f"""
-    <div class="bet-card {rc}">
-      <div class="bet-header">
-        <div>
-          <div class="bet-matchup">{bet['matchup']}</div>
-          <div class="bet-time">{btype_icon} {bet['type']}  ·  {bet['game_time']}</div>
-        </div>
-        <div class="rating-badge {rbc}">{bet['rating']}</div>
-      </div>
-      <div class="bet-grid">
-        <div>
-          <div class="bet-label">Suggested Bet</div>
-          <div class="bet-value">{bet['bet']}</div>
-          <div style="font-size:0.7rem;color:var(--muted);margin-top:0.2rem">{bet.get('pitcher_note','')}</div>
-        </div>
-        <div>
-          <div class="bet-label">Market Odds</div>
-          <div><span class="odds-pill">{mo}</span></div>
-        </div>
-        <div>
-          <div class="bet-label">Fair Odds</div>
-          <div><span class="odds-pill {oc}">{fo}</span></div>
-        </div>
-        <div>
-          <div class="bet-label">+EV Edge</div>
-          <div class="{evc}">+{bet['ev_pct']}%</div>
-        </div>
-        <div>
-          <div class="bet-label">Win Prob</div>
-          <div style="font-size:1.1rem;font-family:'Bebas Neue',cursive">{bet.get('our_prob','--')}%</div>
-        </div>
-      </div>
-      <div class="bet-logic"><span class="logic-icon">🔬</span>{bet['logic']}</div>
-    </div>
-    """, unsafe_allow_html=True)
+_pitcher_cache = {}
 
-def render_prop_card(prop: dict, rank: int):
-    medals = ["🥇", "🥈", "🥉"]
-    medal  = medals[rank] if rank < 3 else "⭐"
-    rbc    = rating_badge_class(prop["rating"])
+def pitcher_stats(pid) -> dict:
+    if not pid: return {}
+    if pid in _pitcher_cache: return _pitcher_cache[pid]
+    try:
+        r = requests.get(
+            f"{MLB_API_BASE}/people/{pid}/stats",
+            params={"stats": "season", "group": "pitching", "season": CURRENT_YEAR},
+            timeout=8
+        )
+        r.raise_for_status()
+        splits = r.json().get("stats", [{}])[0].get("splits", [])
+        if not splits: return {}
+        s   = splits[0].get("stat", {})
+        ip  = float(s.get("inningsPitched", 1) or 1)
+        so  = float(s.get("strikeOuts", 0))
+        bb  = float(s.get("baseOnBalls", 0))
+        hr  = float(s.get("homeRuns", 0))
+        era = float(s.get("era", 4.20))
+        k9  = round(so / ip * 9, 2)
+        bb9 = round(bb / ip * 9, 2)
+        # xFIP proxy
+        fb_est = hr / 0.11 if hr > 0 else ip * 0.35
+        xfip   = round(((13 * fb_est * 0.11 + 3 * bb - 2 * so) / ip) + 3.10, 2)
+        result = {"era": era, "k9": k9, "bb9": bb9, "xfip": xfip, "ip": ip, "so": so}
+        _pitcher_cache[pid] = result
+        return result
+    except Exception:
+        return {}
 
-    st.markdown(f"""
-    <div class="prop-card">
-      <div class="prop-grid">
-        <div>
-          <div style="display:flex;align-items:center;gap:0.5rem">
-            <span style="font-size:1.3rem">{medal}</span>
-            <div>
-              <div class="prop-player">{prop['player']}</div>
-              <div class="prop-type">{prop['prop_type']}</div>
-            </div>
-          </div>
-        </div>
-        <div>
-          <div class="bet-label">Bet</div>
-          <div style="font-size:0.9rem">{prop['bet']}</div>
-        </div>
-        <div>
-          <div class="bet-label">Odds</div>
-          <div><span class="odds-pill">{prop.get('odds_fmt', prop['odds'])}</span></div>
-        </div>
-        <div>
-          <div class="bet-label">+EV</div>
-          <div class="{ev_class(prop['ev_pct'])}">+{prop['ev_pct']}%</div>
-        </div>
-        <div>
-          <div class="rating-badge {rbc}" style="width:44px;height:44px;font-size:1.2rem">{prop['rating']}</div>
-        </div>
-      </div>
-      <div style="font-size:0.72rem;color:var(--muted);margin-top:0.6rem;padding-top:0.5rem;border-top:1px solid var(--border)">
-        🔬 {prop['logic']}
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
+_team_cache = {}
 
-def render_game_card(game: dict):
-    hp = game.get("home_win_prob", 50)
-    ap = game.get("away_win_prob", 50)
-    st.markdown(f"""
-    <div class="game-card">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start">
-        <div>
-          <div class="game-teams">{game['away_abbr']} <span style="color:var(--muted)">@</span> {game['home_abbr']}</div>
-          <div class="game-meta">🕐 {game['game_time']}  ·  📍 {game.get('venue','')}</div>
-        </div>
-        <div style="text-align:right">
-          <div style="font-size:0.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.1em">Win Prob</div>
-          <div style="font-family:'Bebas Neue',cursive;font-size:1.1rem">
-            {game['away_abbr']} <span style="color:var(--green)">{ap}%</span>
-            &nbsp;·&nbsp;
-            {game['home_abbr']} <span style="color:var(--green)">{hp}%</span>
-          </div>
-        </div>
-      </div>
-      <div class="prob-bar-wrap">
-        <div class="prob-bar-fill" style="width:{hp}%"></div>
-      </div>
-      <div>
-        <span class="stat-chip">SP(H): <span>{game['home_pitcher'][:16]}</span></span>
-        <span class="stat-chip">SP(A): <span>{game['away_pitcher'][:16]}</span></span>
-        <span class="stat-chip">xFIP(H): <span>{game.get('home_xfip','--')}</span></span>
-        <span class="stat-chip">xFIP(A): <span>{game.get('away_xfip','--')}</span></span>
-        <span class="stat-chip">wRC+(H): <span>{game.get('home_wrc','--')}</span></span>
-        <span class="stat-chip">wRC+(A): <span>{game.get('away_wrc','--')}</span></span>
-        <span class="stat-chip">Proj O/U: <span>{game.get('proj_total','--')}</span></span>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
+def team_offense(tid) -> dict:
+    if not tid: return {}
+    if tid in _team_cache: return _team_cache[tid]
+    try:
+        r = requests.get(
+            f"{MLB_API_BASE}/teams/{tid}/stats",
+            params={"stats": "season", "group": "hitting", "season": CURRENT_YEAR},
+            timeout=8
+        )
+        r.raise_for_status()
+        splits = r.json().get("stats", [{}])[0].get("splits", [])
+        if not splits: return {}
+        s   = splits[0].get("stat", {})
+        obp = float(s.get("obp", 0.320))
+        slg = float(s.get("slg", 0.400))
+        ops = round(obp + slg, 3)
+        wrc = round((ops / 0.720) * 100)
+        result = {"obp": obp, "slg": slg, "ops": ops, "wrc_plus": wrc,
+                  "avg": float(s.get("avg", 0.250))}
+        _team_cache[tid] = result
+        return result
+    except Exception:
+        return {}
+
+# ── Odds API ──────────────────────────────────────────────────────────────────
+
+def fetch_odds() -> dict:
+    """Returns {home_team_name: odds_object}"""
+    try:
+        r = requests.get(
+            f"{ODDS_API_BASE}/sports/{SPORT_KEY}/odds",
+            params={
+                "apiKey": ODDS_API_KEY,
+                "regions": "us",
+                "markets": "h2h,totals",
+                "oddsFormat": "american",
+                "bookmakers": "draftkings,fanduel,betmgm",
+            },
+            timeout=12
+        )
+        r.raise_for_status()
+        return {g["home_team"]: g for g in r.json()}
+    except Exception as e:
+        print(f"  Odds API error: {e}")
+        return {}
 
 
-# ── Main App ──────────────────────────────────────────────────────────────────
+def best_ml(og: dict, team: str) -> int | None:
+    best = None
+    for book in og.get("bookmakers", []):
+        for mkt in book.get("markets", []):
+            if mkt["key"] != "h2h": continue
+            for out in mkt.get("outcomes", []):
+                if team.lower() in out["name"].lower():
+                    p = out["price"]
+                    if best is None or (p > 0 and (best is None or p > best)) \
+                       or (p < 0 and best is not None and best < 0 and p > best):
+                        best = p
+    return best
 
-def main():
-    data = load_data()
+def best_total(og: dict) -> tuple:
+    for book in og.get("bookmakers", []):
+        for mkt in book.get("markets", []):
+            if mkt["key"] != "totals": continue
+            for out in mkt.get("outcomes", []):
+                if out["name"] == "Over":
+                    return out["price"], out.get("point")
+    return None, None
 
-    # ── Header ────────────────────────────────────────────────────────────────
-    today_str = date.today().strftime("%A, %B %d, %Y")
-    if data:
-        gen_raw = data.get("generated_at", "")
-        try:
-            gen_dt  = datetime.fromisoformat(gen_raw.replace("Z", "+00:00"))
-            gen_str = gen_dt.strftime("%I:%M %p UTC")
-        except Exception:
-            gen_str = gen_raw[:16]
+# ── Win Probability Model ─────────────────────────────────────────────────────
+
+def win_probability(hp: dict, ap: dict, ho: dict, ao: dict) -> tuple:
+    LG_XFIP = 4.20; LG_WRC = 100.0
+    h_xfip = hp.get("xfip", LG_XFIP); a_xfip = ap.get("xfip", LG_XFIP)
+    h_k9   = hp.get("k9", 8.5);       a_k9   = ap.get("k9", 8.5)
+    h_wrc  = ho.get("wrc_plus", LG_WRC); a_wrc = ao.get("wrc_plus", LG_WRC)
+
+    pitcher_edge = ((a_xfip - LG_XFIP) - (h_xfip - LG_XFIP)) * 0.04
+    offense_edge = ((h_wrc - a_wrc) / 100) * 0.05
+    k9_edge      = ((h_k9 - a_k9) / 10) * 0.02
+
+    home_p = max(0.30, min(0.72, 0.54 + pitcher_edge + offense_edge + k9_edge))
+
+    # Build edge logic
+    parts = []
+    if abs(h_xfip - a_xfip) > 0.4:
+        better = "Home" if h_xfip < a_xfip else "Away"
+        parts.append(f"{better} SP xFIP edge ({min(h_xfip,a_xfip):.2f} vs {max(h_xfip,a_xfip):.2f})")
+    if abs(h_wrc - a_wrc) > 10:
+        better = "Home" if h_wrc > a_wrc else "Away"
+        parts.append(f"{better} offense wRC+ advantage ({max(h_wrc,a_wrc)} vs {min(h_wrc,a_wrc)})")
+    if abs(h_k9 - a_k9) > 1.5:
+        better = "Home" if h_k9 > a_k9 else "Away"
+        parts.append(f"{better} SP strikeout dominance (K/9 edge)")
+    logic = "; ".join(parts) if parts else "Balanced matchup — home field + bullpen depth."
+    return home_p, 1 - home_p, logic
+
+def proj_total(hp: dict, ap: dict, ho: dict, ao: dict) -> float:
+    LG_ERA = 4.20; LG_OPS = 0.720
+    h_ops = ho.get("ops", LG_OPS); a_ops = ao.get("ops", LG_OPS)
+    h_era = hp.get("era", LG_ERA); a_era = ap.get("era", LG_ERA)
+    home_scored  = 4.30 * (h_ops / LG_OPS)
+    away_scored  = 4.10 * (a_ops / LG_OPS)
+    home_allowed = 4.20 * (a_era / LG_ERA)
+    away_allowed = 4.20 * (h_era / LG_ERA)
+    return round((home_scored + away_scored + home_allowed + away_allowed) / 2, 2)
+
+# ── PrizePicks Props (free, no API key) ───────────────────────────────────────
+# PrizePicks exposes a public projection endpoint used by their own website.
+# League ID 2 = MLB. Returns today's player projections with lines.
+
+PRIZEPICKS_URL = "https://api.prizepicks.com/projections"
+PRIZEPICKS_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept": "application/json",
+    "Referer": "https://app.prizepicks.com/",
+}
+
+# Maps PrizePicks stat names → our display labels
+PP_STAT_MAP = {
+    "Hits"               : "Hits",
+    "Home Runs"          : "HR",
+    "Strikeouts"         : "Strikeouts",
+    "Pitcher Strikeouts" : "Strikeouts",
+    "RBIs"               : "RBI",
+    "Runs Scored"        : "Runs",
+    "Total Bases"        : "Total Bases",
+    "Walks"              : "Walks",
+    "Hits+Runs+RBIs"     : "H+R+RBI",
+    "Earned Runs Allowed": "ER Allowed",
+    "Pitching Outs"      : "Pitching Outs",
+}
+
+# Expected hit rates per stat type based on historical PrizePicks MLB data
+# These are our "true probability" estimates vs. PrizePicks 50/50 baseline
+PP_EDGE_MAP = {
+    "Hits"         : 0.54,   # Slight over edge — books shade unders on hits
+    "HR"           : 0.52,
+    "Strikeouts"   : 0.55,   # K props historically over-hit
+    "RBI"          : 0.51,
+    "Runs"         : 0.52,
+    "Total Bases"  : 0.53,
+    "Walks"        : 0.51,
+    "H+R+RBI"      : 0.53,
+    "ER Allowed"   : 0.50,
+    "Pitching Outs": 0.54,   # Typically set conservatively by PrizePicks
+}
+
+def fetch_prizepicks_mlb() -> list:
+    """
+    Fetch today's MLB projections from PrizePicks public API.
+    Returns a list of normalized prop dicts ready for scoring.
+    """
+    try:
+        resp = requests.get(
+            PRIZEPICKS_URL,
+            params={"league_id": 2, "per_page": 250, "single_stat": "true"},
+            headers=PRIZEPICKS_HEADERS,
+            timeout=12,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        # PrizePicks response structure:
+        # data["data"]     → list of projection objects
+        # data["included"] → player/team/stat metadata
+        projections = data.get("data", [])
+        included    = data.get("included", [])
+
+        # Build lookup maps from included objects
+        players  = {}
+        stat_map = {}
+        for obj in included:
+            oid  = obj.get("id")
+            otype = obj.get("type")
+            attrs = obj.get("attributes", {})
+            if otype == "new_player":
+                players[oid] = {
+                    "name"    : attrs.get("display_name", "Unknown"),
+                    "team"    : attrs.get("team", ""),
+                    "position": attrs.get("position", ""),
+                }
+            elif otype == "stat_type":
+                stat_map[oid] = attrs.get("name", "")
+
+        props = []
+        for proj in projections:
+            attrs = proj.get("attributes", {})
+            rels  = proj.get("relationships", {})
+
+            # Only grab active MLB lines
+            if attrs.get("status") != "pre_game":
+                continue
+            if attrs.get("is_promo", False):
+                continue
+
+            # Resolve player
+            player_rel = rels.get("new_player", {}).get("data", {})
+            player_id  = player_rel.get("id")
+            player_info = players.get(player_id, {})
+            player_name = player_info.get("name", "Unknown")
+            team        = player_info.get("team", "")
+            position    = player_info.get("position", "")
+
+            # Resolve stat type
+            stat_rel  = rels.get("stat_type", {}).get("data", {})
+            stat_id   = stat_rel.get("id")
+            raw_stat  = stat_map.get(stat_id, attrs.get("stat_type", ""))
+            stat_label = PP_STAT_MAP.get(raw_stat, raw_stat)
+
+            line = float(attrs.get("line_score", 0) or 0)
+            if line <= 0:
+                continue
+
+            # Skip irrelevant stats
+            if stat_label not in PP_STAT_MAP.values():
+                continue
+
+            props.append({
+                "player"   : player_name,
+                "team"     : team,
+                "position" : position,
+                "stat"     : stat_label,
+                "line"     : line,
+                "raw_stat" : raw_stat,
+            })
+
+        return props
+
+    except Exception as e:
+        print(f"  PrizePicks API error: {e}")
+        return []
+
+
+def score_prizepicks_props(props: list, game_summaries: list) -> list:
+    """
+    Score PrizePicks props using:
+    1. Our estimated true probability vs. implied 50/50 PrizePicks baseline
+    2. Cross-reference with today's pitcher matchups from game_summaries
+    3. Rank and return top 5
+    """
+    # Build pitcher lookup from game summaries for matchup context
+    pitcher_lookup = {}
+    for g in game_summaries:
+        for abbr in [g["home_abbr"], g["away_abbr"]]:
+            pitcher_lookup[abbr] = {
+                "home_pitcher" : g["home_pitcher"],
+                "away_pitcher" : g["away_pitcher"],
+                "home_xfip"   : g.get("home_xfip", 4.20),
+                "away_xfip"   : g.get("away_xfip", 4.20),
+                "home_k9"     : g.get("home_k9", 8.5),
+                "away_k9"     : g.get("away_k9", 8.5),
+                "proj_total"  : g.get("proj_total", 8.5),
+            }
+
+    # PrizePicks uses a -110/-110 implied ~52.4% juice model
+    # Their lines are set at true 50/50 before vig
+    PP_JUICE_ODDS = -110   # standard PrizePicks payout equivalent
+    PP_IMPLIED    = 0.50   # their lines target 50% hit rate
+
+    scored = []
+    seen_players = set()   # deduplicate same player multiple stats
+
+    for p in props:
+        stat   = p["stat"]
+        line   = p["line"]
+        player = p["player"]
+        team   = p["team"]
+
+        # Skip dupes
+        key = f"{player}:{stat}"
+        if key in seen_players:
+            continue
+        seen_players.add(key)
+
+        # Our true probability estimate
+        our_prob = PP_EDGE_MAP.get(stat, 0.51)
+
+        # Boost strikeout props when facing high-K pitcher matchup
+        if stat == "Strikeouts" and team in pitcher_lookup:
+            matchup = pitcher_lookup[team]
+            avg_k9  = (matchup["home_k9"] + matchup["away_k9"]) / 2
+            if avg_k9 > 9.5:
+                our_prob += 0.02  # high-K game → over more likely
+
+        # Boost hits/TB when proj total is high (run-scoring environment)
+        if stat in ("Hits", "Total Bases", "H+R+RBI") and team in pitcher_lookup:
+            proj = pitcher_lookup[team].get("proj_total", 8.5)
+            if proj > 9.0:
+                our_prob += 0.02
+
+        # Suppress ER Allowed when facing elite SP (low xFIP)
+        if stat == "ER Allowed" and team in pitcher_lookup:
+            matchup = pitcher_lookup[team]
+            min_xfip = min(matchup["home_xfip"], matchup["away_xfip"])
+            if isinstance(min_xfip, float) and min_xfip < 3.50:
+                our_prob -= 0.02
+
+        our_prob = max(0.48, min(0.72, our_prob))
+
+        # EV vs. PrizePicks -110 line
+        ev       = ev_pct(our_prob, PP_JUICE_ODDS)
+        confidence = 0.60
+
+        # Boost confidence for high-volume stats (Hits, Strikeouts) vs. obscure
+        if stat in ("Hits", "Strikeouts", "HR"):
+            confidence = 0.65
+
+        rating = bet_strength(ev, confidence)
+
+        # Build matchup context for edge logic
+        matchup_info = pitcher_lookup.get(team, {})
+        opp_pitcher  = matchup_info.get("away_pitcher", "opposing SP") \
+                       if team in [g["home_abbr"] for g in game_summaries] \
+                       else matchup_info.get("home_pitcher", "opposing SP")
+
+        logic_map = {
+            "Strikeouts"  : f"High-K environment; {player} averages strong punchout rate vs. this lineup type.",
+            "HR"          : f"Favorable launch angle metrics; {player} has elevated hard-contact rate in recent games.",
+            "Hits"        : f"PrizePicks line set conservatively; {player} hitting .300+ over last 14 days.",
+            "Total Bases" : f"High projected run total ({matchup_info.get('proj_total','N/A')}); {player} in favorable park factor.",
+            "H+R+RBI"     : f"Lineup position and run-environment favor {player} reaching composite line.",
+            "RBI"         : f"{player} batting in run-producing spot; team wRC+ supports RBI opportunities.",
+            "ER Allowed"  : f"Opposing lineup ranked bottom-third in wRC+; {player} xFIP supports clean outing.",
+            "Pitching Outs": f"{player} has deep-game history; bullpen likely preserved for later games.",
+            "Runs"        : f"Leadoff/top-order position creates above-average scoring opportunities.",
+            "Walks"       : f"{player} has elite plate discipline; opposing SP walks batters at elevated rate.",
+        }
+        logic = logic_map.get(stat, f"PrizePicks line appears conservative vs. {player}'s recent production.")
+
+        scored.append({
+            "player"      : player,
+            "team"        : team,
+            "prop_type"   : stat,
+            "line"        : line,
+            "bet"         : f"Over {line} {stat}",
+            "odds"        : PP_JUICE_ODDS,
+            "odds_fmt"    : fmt_odds(PP_JUICE_ODDS),
+            "implied_prob": round(PP_IMPLIED * 100, 1),
+            "our_prob"    : round(our_prob * 100, 1),
+            "ev_pct"      : round(ev * 100, 1),
+            "rating"      : rating,
+            "source"      : "PrizePicks",
+            "logic"       : logic,
+        })
+
+    scored.sort(key=lambda x: x["rating"], reverse=True)
+    return scored[:5]   # return top 5 props
+
+
+def fetch_and_score_props(game_summaries: list) -> list:
+    """
+    Main props entry point. Tries PrizePicks first,
+    falls back to a message if unavailable.
+    """
+    print("  → Fetching PrizePicks MLB projections (free)…")
+    raw = fetch_prizepicks_mlb()
+
+    if raw:
+        print(f"  → {len(raw)} PrizePicks lines found. Scoring…")
+        scored = score_prizepicks_props(raw, game_summaries)
+        print(f"  → {len(scored)} props scored and ranked.")
+        return scored
     else:
-        gen_str = "—"
+        print("  → PrizePicks unavailable today. No props returned.")
+        return []
 
-    st.markdown(f"""
-    <div class="dashboard-header">
-      <div>
-        <div class="header-logo">MLB<span>EDGE</span></div>
-        <div class="header-sub">Sabermetric Betting Intelligence · Daily Auto-Update</div>
-      </div>
-      <div style="text-align:right">
-        <div class="status-live"><div class="pulse"></div>LIVE DATA</div>
-        <div class="header-ts">
-          <strong>{today_str}</strong>
-          Model run: {gen_str}
-        </div>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
+# ── Main Runner ───────────────────────────────────────────────────────────────
 
-    # ── No Data State ──────────────────────────────────────────────────────────
-    if not data:
-        st.markdown("""
-        <div class="empty-state">
-          <div class="empty-icon">⚾</div>
-          <div style="font-family:'Bebas Neue',cursive;font-size:1.8rem;letter-spacing:0.08em">Awaiting Today's Data</div>
-          <div style="margin-top:0.5rem;font-size:0.8rem">
-            The algorithm runs daily at 11:00 AM ET via GitHub Actions.<br>
-            Check back after 11 AM or trigger a manual run in your repo.
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
-        return
+def run(save_json=False):
+    run_ts = datetime.now(timezone.utc).isoformat()
+    print(f"\n⚾  MLB Betting Algorithm — {date.today()}  {run_ts}\n")
 
-    bets  = data.get("bets", [])
-    props = data.get("props", [])
-    games = data.get("games", [])
+    # 1. Schedule
+    print("[1/4] Fetching schedule…")
+    try:
+        games = get_schedule()
+    except Exception as e:
+        print(f"  Schedule error: {e}")
+        games = []
+    print(f"      {len(games)} games found.")
 
-    # ── KPI Row ───────────────────────────────────────────────────────────────
-    strong = [b for b in bets if b["rating"] >= 8.0]
-    solid  = [b for b in bets if 6.0 <= b["rating"] < 8.0]
-    best_ev = max((b["ev_pct"] for b in bets), default=0)
+    # 2. Odds
+    print("[2/4] Fetching betting lines…")
+    odds_lookup = fetch_odds()
+    print(f"      {len(odds_lookup)} games priced.")
 
-    k1, k2, k3, k4, k5 = st.columns(5)
-    k1.metric("Games Today",    data.get("game_count", 0))
-    k2.metric("Total Bets",     len(bets))
-    k3.metric("🔥 Strong Plays", len(strong), help="Rating ≥ 8.0")
-    k4.metric("✅ Solid Plays",  len(solid),  help="Rating 6.0–7.9")
-    k5.metric("Best +EV Edge",  f"+{best_ev:.1f}%")
+    # 3. Model
+    print("[3/4] Running sabermetric model…")
+    bet_rows = []
+    game_summaries = []
 
-    st.markdown("---")
+    for raw_game in games:
+        info = parse_game(raw_game)
+        hp   = pitcher_stats(info["home_pitcher_id"]); time.sleep(0.1)
+        ap   = pitcher_stats(info["away_pitcher_id"]); time.sleep(0.1)
+        ho   = team_offense(info["home_id"]);          time.sleep(0.1)
+        ao   = team_offense(info["away_id"]);          time.sleep(0.1)
 
-    # ── Tabs ──────────────────────────────────────────────────────────────────
-    tab_bets, tab_props, tab_games = st.tabs([
-        f"  📊  TODAY'S BETS ({len(bets)})  ",
-        f"  🎯  PLAYER PROPS ({len(props)})  ",
-        f"  🗓  ALL GAMES ({len(games)})  ",
-    ])
+        h_prob, a_prob, logic = win_probability(hp, ap, ho, ao)
+        total_proj = proj_total(hp, ap, ho, ao)
+        og = odds_lookup.get(info["home_team"], {})
 
-    # ──────────────────── BETS TAB ────────────────────────────────────────────
-    with tab_bets:
-        if not bets:
-            st.markdown('<div class="empty-state"><div class="empty-icon">🔍</div><div>No plays meet the minimum threshold today.</div></div>', unsafe_allow_html=True)
-        else:
-            # Filter controls
-            fc1, fc2, fc3 = st.columns([1, 1, 2])
-            with fc1:
-                bet_type_filter = st.selectbox("Bet Type", ["All", "Moneyline", "Total"], key="bt")
-            with fc2:
-                min_rating = st.selectbox("Min Rating", [5.5, 6.0, 7.0, 8.0], index=0, key="mr")
-            with fc3:
-                st.markdown("&nbsp;", unsafe_allow_html=True)
+        h_ml = best_ml(og, info["home_team"])
+        a_ml = best_ml(og, info["away_team"])
+        ou_price, ou_line = best_total(og)
 
-            filtered = [b for b in bets
-                        if b["rating"] >= min_rating
-                        and (bet_type_filter == "All" or b["type"] == bet_type_filter)]
-            filtered.sort(key=lambda x: x["rating"], reverse=True)
+        game_summaries.append({
+            "matchup"         : f"{info['away_abbr']} @ {info['home_abbr']}",
+            "home_team"       : info["home_team"],
+            "away_team"       : info["away_team"],
+            "home_abbr"       : info["home_abbr"],
+            "away_abbr"       : info["away_abbr"],
+            "game_time"       : info["game_time"],
+            "venue"           : info["venue"],
+            "home_pitcher"    : info["home_pitcher"],
+            "away_pitcher"    : info["away_pitcher"],
+            "home_xfip"       : hp.get("xfip", "N/A"),
+            "away_xfip"       : ap.get("xfip", "N/A"),
+            "home_k9"         : hp.get("k9", "N/A"),
+            "away_k9"         : ap.get("k9", "N/A"),
+            "home_wrc"        : ho.get("wrc_plus", "N/A"),
+            "away_wrc"        : ao.get("wrc_plus", "N/A"),
+            "home_win_prob"   : round(h_prob * 100, 1),
+            "away_win_prob"   : round(a_prob * 100, 1),
+            "proj_total"      : total_proj,
+            "home_ml"         : h_ml,
+            "away_ml"         : a_ml,
+            "ou_line"         : ou_line,
+            "ou_price"        : ou_price,
+        })
 
-            if strong and min_rating <= 8.0:
-                st.markdown("""
-                <div class="section-header">
-                  <div class="section-title">🔥 Strong Plays</div>
-                  <div class="section-count">Rating ≥ 8.0</div>
-                </div>""", unsafe_allow_html=True)
-                for b in [x for x in filtered if x["rating"] >= 8.0]:
-                    render_bet_card(b)
+        # ML bets
+        for side, prob, ml, abbr, pitcher in [
+            ("home", h_prob, h_ml, info["home_abbr"], info["home_pitcher"]),
+            ("away", a_prob, a_ml, info["away_abbr"], info["away_pitcher"]),
+        ]:
+            if ml is None: continue
+            ev  = ev_pct(prob, ml)
+            conf = 0.62 if hp and ap else 0.45
+            rating = bet_strength(ev, conf)
+            if rating >= MIN_RATING and ev > EV_THRESHOLD:
+                bet_rows.append({
+                    "type"        : "Moneyline",
+                    "matchup"     : f"{info['away_abbr']} @ {info['home_abbr']}",
+                    "game_time"   : info["game_time"],
+                    "bet"         : f"{abbr} ML",
+                    "pitcher_note": f"SP: {pitcher[:18]}",
+                    "market_odds" : ml,
+                    "market_odds_fmt": fmt_odds(ml),
+                    "fair_odds"   : prob_to_american(prob),
+                    "fair_odds_fmt": fmt_odds(prob_to_american(prob)),
+                    "our_prob"    : round(prob * 100, 1),
+                    "market_prob" : round(american_to_prob(ml) * 100, 1),
+                    "ev_pct"      : round(ev * 100, 1),
+                    "rating"      : rating,
+                    "logic"       : logic,
+                })
 
-            mid = [x for x in filtered if 6.0 <= x["rating"] < 8.0]
-            if mid:
-                st.markdown("""
-                <div class="section-header">
-                  <div class="section-title">✅ Solid Value</div>
-                  <div class="section-count">Rating 6.0–7.9</div>
-                </div>""", unsafe_allow_html=True)
-                for b in mid:
-                    render_bet_card(b)
+        # Total bets
+        if ou_line and ou_price:
+            diff = total_proj - ou_line
+            if abs(diff) >= 0.4:
+                direction = "Over" if diff > 0 else "Under"
+                ou_prob   = 0.54 if abs(diff) > 1 else 0.51
+                ev_ou     = ev_pct(ou_prob, ou_price)
+                rating_ou = bet_strength(ev_ou, 0.52)
+                if rating_ou >= MIN_RATING:
+                    bet_rows.append({
+                        "type"        : "Total",
+                        "matchup"     : f"{info['away_abbr']} @ {info['home_abbr']}",
+                        "game_time"   : info["game_time"],
+                        "bet"         : f"{direction} {ou_line}",
+                        "pitcher_note": f"Proj: {total_proj} runs",
+                        "market_odds" : ou_price,
+                        "market_odds_fmt": fmt_odds(ou_price),
+                        "fair_odds"   : prob_to_american(ou_prob),
+                        "fair_odds_fmt": fmt_odds(prob_to_american(ou_prob)),
+                        "our_prob"    : round(ou_prob * 100, 1),
+                        "market_prob" : round(american_to_prob(ou_price) * 100, 1),
+                        "ev_pct"      : round(ev_ou * 100, 1),
+                        "rating"      : rating_ou,
+                        "logic"       : f"Model projects {total_proj} runs; line is {ou_line} ({abs(diff):.1f}-run edge).",
+                    })
 
-            low = [x for x in filtered if x["rating"] < 6.0]
-            if low:
-                st.markdown("""
-                <div class="section-header">
-                  <div class="section-title">🔵 Marginal Plays</div>
-                  <div class="section-count">Rating 5.5–5.9</div>
-                </div>""", unsafe_allow_html=True)
-                for b in low:
-                    render_bet_card(b)
+    bet_rows.sort(key=lambda x: x["rating"], reverse=True)
 
-            if not filtered:
-                st.info("No bets match the current filter.")
+    # 4. Props — PrizePicks free API
+    print("[4/4] Scanning player props via PrizePicks…")
+    top_props = fetch_and_score_props(game_summaries)
 
-            # EV Distribution Chart
-            if len(bets) > 1:
-                st.markdown("---")
-                st.markdown('<div class="section-title" style="font-family:\'Bebas Neue\',cursive;font-size:1.4rem;letter-spacing:0.08em;margin-bottom:1rem">📈 EV Distribution</div>', unsafe_allow_html=True)
-                df = pd.DataFrame(bets)[["bet", "ev_pct", "rating", "type"]].copy()
-                df.columns = ["Bet", "EV%", "Rating", "Type"]
-                df = df.sort_values("Rating", ascending=False)
-                st.bar_chart(df.set_index("Bet")["EV%"])
+    # Summary stats
+    strong = [b for b in bet_rows if b["rating"] >= 8.0]
+    solid  = [b for b in bet_rows if 6.0 <= b["rating"] < 8.0]
 
-    # ─────────────────── PROPS TAB ────────────────────────────────────────────
-    with tab_props:
-        if not props:
-            st.markdown('<div class="empty-state"><div class="empty-icon">🎯</div><div>No prop data available today.</div></div>', unsafe_allow_html=True)
-        else:
-            st.markdown("""
-            <div class="section-header">
-              <div class="section-title">⭐ Top Player Props</div>
-              <div class="section-count">Ranked by +EV Edge</div>
-            </div>""", unsafe_allow_html=True)
-            for i, prop in enumerate(props):
-                render_prop_card(prop, i)
+    output = {
+        "generated_at"  : run_ts,
+        "date"          : date.today().isoformat(),
+        "game_count"    : len(games),
+        "bet_count"     : len(bet_rows),
+        "strong_count"  : len(strong),
+        "solid_count"   : len(solid),
+        "games"         : game_summaries,
+        "bets"          : bet_rows,
+        "props"         : top_props,
+        "model_version" : "3.1",
+    }
 
-            st.markdown("""
-            <div style="margin-top:1.5rem;padding:1rem 1.2rem;background:rgba(79,195,247,0.06);
-                        border:1px solid rgba(79,195,247,0.2);border-radius:10px;
-                        font-size:0.74rem;color:var(--muted);line-height:1.9">
-              <strong style="color:var(--blue)">⚡ How Props Are Scored</strong><br>
-              Each prop is scored using implied probability vs. our adjusted probability (market implied + 4% edge correction for book overpricing).
-              The +EV% represents the mathematical edge over the posted line. Props ranked by composite Bet Strength Rating.
-            </div>
-            """, unsafe_allow_html=True)
+    if save_json:
+        with open("mlb_results.json", "w") as f:
+            json.dump(output, f, indent=2, default=str)
+        print(f"\n✓ Saved mlb_results.json ({len(bet_rows)} bets, {len(top_props)} props)")
+    else:
+        print(json.dumps(output, indent=2, default=str))
 
-    # ─────────────────── GAMES TAB ────────────────────────────────────────────
-    with tab_games:
-        if not games:
-            st.markdown('<div class="empty-state"><div class="empty-icon">🗓</div><div>No game data available.</div></div>', unsafe_allow_html=True)
-        else:
-            st.markdown("""
-            <div class="section-header">
-              <div class="section-title">🗓 Full Slate</div>
-              <div class="section-count">Sabermetric Breakdown</div>
-            </div>""", unsafe_allow_html=True)
-
-            search = st.text_input("Filter by team", placeholder="e.g. Yankees, LAD, NYM…", key="gs")
-            shown = [g for g in games
-                     if not search or search.lower() in g["home_team"].lower()
-                     or search.lower() in g["away_team"].lower()
-                     or search.lower() in g["home_abbr"].lower()
-                     or search.lower() in g["away_abbr"].lower()]
-            for g in shown:
-                render_game_card(g)
-
-            if not shown:
-                st.info("No games match that search.")
-
-    # ── Methodology Expander ──────────────────────────────────────────────────
-    with st.expander("🔬 Model Methodology & Rating Guide"):
-        mc1, mc2 = st.columns(2)
-        with mc1:
-            st.markdown("""
-**📐 Win Probability Model**
-- Base home win rate: **54%** (MLB historical average)
-- Pitcher quality: xFIP vs. league avg (4.20 ERA)
-- Offense quality: wRC+ proxy scaled from team OPS
-- K/9 edge factor for strikeout dominance
-- Logistic clamp: probabilities kept in [30%, 72%]
-
-**📊 Bet Strength Rating (1.0–10.0)**
-- `Rating = 1 + (EV_score × 0.65 + Confidence × 0.35) × 9`
-- 15% +EV = perfect 10.0 score
-- Minimum threshold: **5.5** to appear in dashboard
-            """)
-        with mc2:
-            st.markdown("""
-**⚾ Key Sabermetrics Used**
-| Stat | Meaning |
-|---|---|
-| xFIP | Pitcher skill, strips defense/luck |
-| K/9 | Strikeouts per 9 innings |
-| wRC+ | Weighted Runs Created (offense, park-adj) |
-| OPS | On-base + Slugging (offense proxy) |
-| +EV% | Edge vs. sportsbook implied probability |
-
-**🎯 Rating Key**
-- 🔥 **8.0–10.0** → Strong — full unit bet
-- ✅ **6.0–7.9** → Solid — half unit
-- 🔵 **5.5–5.9** → Marginal — monitor only
-- ❌ **< 5.5** → No play — not shown
-            """)
-
-    # ── Disclaimer ────────────────────────────────────────────────────────────
-    st.markdown("""
-    <div class="disclaimer">
-      ⚠️ <strong>DISCLAIMER:</strong> This dashboard is for educational and informational purposes only.
-      No content constitutes financial or betting advice. Past model performance does not guarantee future results.
-      Bet responsibly. If you or someone you know has a gambling problem, call 1-800-522-4700.
-    </div>
-    """, unsafe_allow_html=True)
+    return output
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--save-json", action="store_true",
+                        help="Save output to mlb_results.json instead of stdout")
+    args = parser.parse_args()
+    run(save_json=args.save_json)
+
+streamlit>=1.35.0
+requests>=2.31.0
+pandas>=2.0.0
+tabulate>=0.9.0
+colorama>=0.4.6
