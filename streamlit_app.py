@@ -659,9 +659,3 @@ if __name__ == "__main__":
                         help="Save output to mlb_results.json instead of stdout")
     args = parser.parse_args()
     run(save_json=args.save_json)
-
-streamlit>=1.35.0
-requests>=2.31.0
-pandas>=2.0.0
-tabulate>=0.9.0
-colorama>=0.4.6
