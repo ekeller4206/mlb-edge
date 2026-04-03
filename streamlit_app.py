@@ -82,6 +82,22 @@ input[type="text"] {
     color: #e2ddd6 !important;
     border-radius: 10px !important;
 }
+
+/* ── MOBILE RESPONSIVE ─────────────────── */
+@media (max-width: 768px) {
+    .block-container { padding: 1rem 0.8rem 3rem !important; }
+    [data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; gap: 0.5rem !important; }
+    [data-testid="column"] { min-width: 45% !important; flex: 1 1 45% !important; }
+    [data-baseweb="tab"] { font-size: 0.6rem !important; letter-spacing: 0.06em !important; padding: 0.4rem 0.5rem !important; }
+    [data-testid="stMetricValue"] { font-size: 1.8rem !important; }
+    div[data-testid="stSelectbox"] { width: 100% !important; }
+}
+@media (max-width: 480px) {
+    .block-container { padding: 0.8rem 0.5rem 3rem !important; }
+    [data-testid="stMetricValue"] { font-size: 1.4rem !important; }
+    [data-baseweb="tab"] { font-size: 0.52rem !important; padding: 0.3rem 0.35rem !important; }
+    [data-testid="metric-container"] { padding: 0.7rem 0.8rem !important; }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -139,7 +155,7 @@ def render_bet(bet):
           <div style="font-size:0.5rem;color:rgba(226,221,214,0.3);letter-spacing:0.1em">RATING</div>
         </div>
       </div>
-      <div style="display:grid;grid-template-columns:2.2fr 1fr 1fr 1.2fr 1fr;gap:1.2rem;
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:0.8rem;
                   padding:1rem 0;border-top:1px solid rgba(255,200,60,0.08);
                   border-bottom:1px solid rgba(255,200,60,0.08);margin-bottom:0.9rem">
         <div>
@@ -194,7 +210,7 @@ def render_prop(prop, rank):
                 padding:1.1rem 1.4rem;margin-bottom:0.9rem;position:relative;overflow:hidden">
       <div style="position:absolute;top:0;left:0;bottom:0;width:2px;
                   background:linear-gradient(180deg,transparent,#a78bfa,transparent)"></div>
-      <div style="display:flex;justify-content:space-between;align-items:center">
+      <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:0.8rem">
         <div style="display:flex;align-items:center;gap:1rem">
           <div style="font-family:'Playfair Display',serif;font-size:1.1rem;font-weight:700;
                       color:rgba(167,139,250,0.4);min-width:24px">{icons[rank] if rank < 5 else 'V'}</div>
@@ -269,7 +285,7 @@ def render_game(game):
       <div style="background:rgba(255,255,255,0.04);border-radius:3px;height:3px;margin:0.7rem 0;overflow:hidden">
         <div style="width:{hp}%;height:100%;background:linear-gradient(90deg,#ffc83c,#00ffb3);border-radius:3px"></div>
       </div>
-      <div style="display:flex;flex-wrap:wrap;gap:0.35rem">
+      <div style="display:flex;flex-wrap:wrap;gap:0.35rem;margin-top:0.3rem">
         <span style="background:rgba(255,200,60,0.05);border:1px solid rgba(255,200,60,0.1);border-radius:6px;padding:0.12rem 0.5rem;font-size:0.62rem;color:rgba(255,200,60,0.5)">SP(H) <span style="color:#e2ddd6">{game['home_pitcher'][:16]}</span></span>
         <span style="background:rgba(255,200,60,0.05);border:1px solid rgba(255,200,60,0.1);border-radius:6px;padding:0.12rem 0.5rem;font-size:0.62rem;color:rgba(255,200,60,0.5)">SP(A) <span style="color:#e2ddd6">{game['away_pitcher'][:16]}</span></span>
         <span style="background:rgba(255,200,60,0.05);border:1px solid rgba(255,200,60,0.1);border-radius:6px;padding:0.12rem 0.5rem;font-size:0.62rem;color:rgba(255,200,60,0.5)">xFIP(H) <span style="color:#e2ddd6">{game.get('home_xfip','--')}</span></span>
@@ -295,11 +311,11 @@ if data:
 
 # ── Header ─────────────────────────────────────────────────────────────────
 st.markdown(f"""
-<div style="display:flex;justify-content:space-between;align-items:flex-start;
-            margin-bottom:2.5rem;padding-bottom:2rem;
+<div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;
+            gap:1rem;margin-bottom:2rem;padding-bottom:1.5rem;
             border-bottom:1px solid rgba(255,200,60,0.12)">
   <div>
-    <div style="font-family:'Playfair Display',serif;font-size:3.8rem;font-weight:900;
+    <div style="font-family:'Playfair Display',serif;font-size:clamp(2rem,6vw,3.8rem);font-weight:900;
                 line-height:1;letter-spacing:-0.01em">
       <span style="color:#e2ddd6">MLB</span><span style="color:#ffc83c">EDGE</span>
     </div>
