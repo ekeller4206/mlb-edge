@@ -162,14 +162,14 @@ def team_offense(tid) -> dict:
 # ── Odds API ──────────────────────────────────────────────────────────────────
 
 def fetch_odds() -> dict:
-    """Returns {home_team_name: odds_object}"""
+    """Returns {home_team_name: odds_object} — includes h2h, totals, spreads (run line)."""
     try:
         r = requests.get(
             f"{ODDS_API_BASE}/sports/{SPORT_KEY}/odds",
             params={
                 "apiKey": ODDS_API_KEY,
                 "regions": "us",
-                "markets": "h2h,totals",
+                "markets": "h2h,totals,spreads",
                 "oddsFormat": "american",
                 "bookmakers": "draftkings,fanduel,betmgm",
             },
@@ -203,6 +203,63 @@ def best_total(og: dict) -> tuple:
                 if out["name"] == "Over":
                     return out["price"], out.get("point")
     return None, None
+
+def best_runline(og: dict, team: str) -> tuple:
+    """
+    Find the best run line odds for a team.
+    MLB run lines are almost always -1.5 (favorite) or +1.5 (underdog).
+    Returns (price, point) e.g. (+145, -1.5) or (-165, +1.5)
+    """
+    best_price = None
+    best_point = None
+    for book in og.get("bookmakers", []):
+        for mkt in book.get("markets", []):
+            if mkt["key"] != "spreads": continue
+            for out in mkt.get("outcomes", []):
+                if team.lower() in out["name"].lower():
+                    p = out["price"]
+                    pt = out.get("point", -1.5)
+                    if best_price is None or p > best_price:
+                        best_price = p
+                        best_point = pt
+    return best_price, best_point
+
+def runline_win_prob(ml_win_prob: float, point: float, proj_total: float) -> float:
+    """
+    Estimate probability of covering the run line given:
+    - ml_win_prob: our estimated win probability
+    - point: the run line spread (e.g. -1.5 or +1.5)
+    - proj_total: projected total runs scored
+
+    Logic:
+    - If covering -1.5: team must win by 2+
+      → Roughly 72% of ML wins are by 2+ runs historically
+    - If covering +1.5: team either wins OR loses by exactly 1
+      → Roughly 28% of ML losses are by exactly 1 run
+    """
+    if point is None:
+        return 0.0
+
+    # Historical MLB: ~72% of wins are by 2+ runs, ~28% are walk-offs/1-run wins
+    WIN_BY_2_RATE   = 0.72
+    LOSE_BY_1_RATE  = 0.28
+
+    # Adjust slightly for high-scoring games (more blowouts) vs. low scoring (more 1-run)
+    if proj_total < 7.0:
+        WIN_BY_2_RATE  = 0.65
+        LOSE_BY_1_RATE = 0.35
+    elif proj_total > 10.0:
+        WIN_BY_2_RATE  = 0.78
+        LOSE_BY_1_RATE = 0.22
+
+    if point <= -1.0:
+        # Covering -1.5: need to win by 2+
+        return ml_win_prob * WIN_BY_2_RATE
+    else:
+        # Covering +1.5: win OR lose by 1
+        prob_win     = ml_win_prob
+        prob_lose_by1 = (1 - ml_win_prob) * LOSE_BY_1_RATE
+        return prob_win + prob_lose_by1
 
 # ── Win Probability Model ─────────────────────────────────────────────────────
 
@@ -620,6 +677,58 @@ def run(save_json=False):
                         "logic"       : f"Model projects {total_proj} runs; line is {ou_line} ({abs(diff):.1f}-run edge).",
                     })
 
+        # ── Run Line bets ──────────────────────────────────────────────────────
+        for side, ml_prob, abbr, pitcher in [
+            ("home", h_prob, info["home_abbr"], info["home_pitcher"]),
+            ("away", a_prob, info["away_abbr"], info["away_pitcher"]),
+        ]:
+            rl_price, rl_point = best_runline(og, info["home_team"] if side == "home" else info["away_team"])
+            if rl_price is None or rl_point is None:
+                continue
+
+            rl_prob = runline_win_prob(ml_prob, rl_point, total_proj)
+            if rl_prob <= 0:
+                continue
+
+            ev_rl     = ev_pct(rl_prob, rl_price)
+            conf_rl   = 0.58 if hp and ap else 0.42
+            rating_rl = bet_strength(ev_rl, conf_rl)
+
+            if rating_rl >= MIN_RATING and ev_rl > EV_THRESHOLD:
+                spread_label = f"{'+' if rl_point > 0 else ''}{rl_point}"
+                # Build run line logic
+                if rl_point <= -1.0:
+                    rl_logic = (
+                        f"Model gives {abbr} {round(ml_prob*100,1)}% ML win prob; "
+                        f"historically {round(runline_win_prob(ml_prob, rl_point, total_proj)*100,1)}% "
+                        f"of wins are by 2+ runs at this proj. total ({total_proj}). "
+                        f"Run line pays better than ML."
+                    )
+                else:
+                    rl_logic = (
+                        f"{abbr} is the underdog at {round(ml_prob*100,1)}% ML win prob; "
+                        f"+1.5 covers a win OR a 1-run loss. "
+                        f"Model estimates {round(rl_prob*100,1)}% cover probability vs. "
+                        f"market implied {round(american_to_prob(rl_price)*100,1)}%."
+                    )
+
+                bet_rows.append({
+                    "type"           : "Run Line",
+                    "matchup"        : f"{info['away_abbr']} @ {info['home_abbr']}",
+                    "game_time"      : info["game_time"],
+                    "bet"            : f"{abbr} RL {spread_label}",
+                    "pitcher_note"   : f"SP: {pitcher[:18]}",
+                    "market_odds"    : rl_price,
+                    "market_odds_fmt": fmt_odds(rl_price),
+                    "fair_odds"      : prob_to_american(rl_prob),
+                    "fair_odds_fmt"  : fmt_odds(prob_to_american(rl_prob)),
+                    "our_prob"       : round(rl_prob * 100, 1),
+                    "market_prob"    : round(american_to_prob(rl_price) * 100, 1),
+                    "ev_pct"         : round(ev_rl * 100, 1),
+                    "rating"         : rating_rl,
+                    "logic"          : rl_logic,
+                })
+
     bet_rows.sort(key=lambda x: x["rating"], reverse=True)
 
     # 4. Props — PrizePicks free API
@@ -640,7 +749,7 @@ def run(save_json=False):
         "games"         : game_summaries,
         "bets"          : bet_rows,
         "props"         : top_props,
-        "model_version" : "3.1",
+        "model_version" : "3.2",
     }
 
     if save_json:
