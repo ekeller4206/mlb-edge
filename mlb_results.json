@@ -1,54 +1,12 @@
 {
-  "generated_at": "2026-10-01T20:04:25.241576+00:00",
-  "date": "2026-10-01",
-  "game_count": 1,
-  "bet_count": 1,
+  "generated_at": "2026-10-02T19:43:16.418245+00:00",
+  "date": "2026-10-02",
+  "game_count": 0,
+  "bet_count": 0,
   "strong_count": 0,
-  "solid_count": 1,
-  "games": [
-    {
-      "matchup": "PHI @ ATL",
-      "home_team": "Atlanta Braves",
-      "away_team": "Philadelphia Phillies",
-      "home_abbr": "ATL",
-      "away_abbr": "PHI",
-      "game_time": "8:00 PM ET",
-      "venue": "Truist Park",
-      "home_pitcher": "Ray Kerr",
-      "away_pitcher": "Aaron Nola",
-      "home_xfip": 4.08,
-      "away_xfip": 4.84,
-      "home_k9": 7.97,
-      "away_k9": 9.1,
-      "home_wrc": 100,
-      "away_wrc": 98,
-      "home_win_prob": 55.7,
-      "away_win_prob": 44.3,
-      "proj_total": 8.94,
-      "home_ml": -105,
-      "away_ml": -110,
-      "ou_line": 7.5,
-      "ou_price": -104
-    }
-  ],
-  "bets": [
-    {
-      "type": "Moneyline",
-      "matchup": "PHI @ ATL",
-      "game_time": "8:00 PM ET",
-      "bet": "ATL ML",
-      "pitcher_note": "SP: Ray Kerr",
-      "market_odds": -105,
-      "market_odds_fmt": "-105",
-      "fair_odds": -125,
-      "fair_odds_fmt": "-125",
-      "our_prob": 55.7,
-      "market_prob": 51.2,
-      "ev_pct": 4.4,
-      "rating": 6.2,
-      "logic": "Home SP xFIP edge (4.08 vs 4.84); Away SP K-BB% command edge (15.7% vs 11.6%); \u26a0 Early season \u2014 stats heavily regressed toward league avg"
-    }
-  ],
+  "solid_count": 0,
+  "games": [],
+  "bets": [],
   "props": [],
   "model_version": "4.0"
 }
