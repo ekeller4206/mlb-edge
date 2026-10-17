@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-10-16T18:34:50.194184+00:00",
-  "date": "2026-10-16",
+  "generated_at": "2026-10-17T17:43:37.048931+00:00",
+  "date": "2026-10-17",
   "game_count": 1,
   "bet_count": 0,
   "strong_count": 0,
@@ -12,7 +12,7 @@
       "away_team": "Tampa Bay Rays",
       "home_abbr": "CLE",
       "away_abbr": "TB",
-      "game_time": "8:00 PM ET",
+      "game_time": "8:08 PM ET",
       "venue": "Progressive Field",
       "home_pitcher": "Shawn Armstrong",
       "away_pitcher": "Nick Martinez",
@@ -25,10 +25,10 @@
       "home_win_prob": 50.8,
       "away_win_prob": 49.2,
       "proj_total": 8.68,
-      "home_ml": -108,
-      "away_ml": -108,
+      "home_ml": -102,
+      "away_ml": -112,
       "ou_line": 6.5,
-      "ou_price": -118
+      "ou_price": -112
     }
   ],
   "bets": [],
